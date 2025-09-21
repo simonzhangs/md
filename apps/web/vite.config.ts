@@ -15,6 +15,16 @@ export default defineConfig({
   base: process.env.SERVER_ENV === `NETLIFY` ? `/` : `/md/`,
   define: { process },
   envPrefix: [`VITE_`, `CF_`],
+  server: {
+    proxy: {
+      '/cgi-bin': {
+        target: `https://api.weixin.qq.com`,
+        changeOrigin: true,
+        secure: true,
+        rewrite: path => path.replace(/^\/cgi-bin/, `/cgi-bin`),
+      },
+    },
+  },
   plugins: [
     vue(),
     UnoCSS(),

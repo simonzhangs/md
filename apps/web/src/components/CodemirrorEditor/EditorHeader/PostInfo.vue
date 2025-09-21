@@ -3,6 +3,7 @@ import type { Post, PostAccount } from '@md/shared/types'
 import { Check, Info } from 'lucide-vue-next'
 import { CheckboxIndicator, CheckboxRoot, Primitive } from 'radix-vue'
 import { useStore } from '@/stores'
+import { toast } from '@/utils/toast'
 
 const store = useStore()
 const { output, editor } = storeToRefs(store)
@@ -20,6 +21,19 @@ const form = ref<Post>({
   markdown: ``,
   accounts: [] as PostAccount[],
 })
+
+// 微信公众号相关
+const wechatForm = ref({
+  author: ``,
+  digest: ``,
+  contentSourceUrl: ``,
+  thumbMediaId: ``,
+  needOpenComment: 1,
+  onlyFansCanComment: 0,
+})
+
+const wechatPublishing = ref(false)
+const wechatConfigDialogVisible = ref(false)
 
 const allowPost = computed(() => extensionInstalled.value && form.value.accounts.some(a => a.checked))
 
@@ -57,6 +71,9 @@ async function prePost() {
     form.value = {
       ...auto,
     }
+
+    // 同时填充微信公众号表单的默认值
+    wechatForm.value.digest = auto.desc
   }
 }
 
@@ -80,6 +97,107 @@ function post() {
   form.value.accounts = form.value.accounts.filter(a => a.checked)
   postTaskDialogVisible.value = true
   dialogVisible.value = false
+}
+
+// CSS变量转换为内联样式的函数
+function convertCssVarsToInline(html: string): string {
+  // 定义CSS变量到实际值的映射
+  const cssVars: Record<string, string> = {
+    '--md-primary-color': `#0F4C81`,
+    '--foreground': `0, 0%, 0%`, // 默认黑色
+  }
+
+  // 移除<style>标签及其内容
+  html = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ``)
+
+  // 移除CSS变量定义
+  html = html.replace(/--[a-z0-9-]+:[^;]+;/gi, ``)
+
+  // 替换CSS变量引用
+  Object.keys(cssVars).forEach((varName) => {
+    const regex = new RegExp(`var\\(${varName}\\)`, `g`)
+    html = html.replace(regex, cssVars[varName])
+  })
+
+  // 处理hsl(var(--foreground))的情况
+  html = html.replace(/hsl\(var\(--foreground\)\)/g, `hsl(0, 0%, 0%)`)
+
+  // 清理多余的分号和空格
+  html = html.replace(/;\s*;/g, `;`)
+  html = html.replace(/\s+/g, ` `)
+  html = html.replace(/"\s+/g, `"`)
+  html = html.replace(/\s+"/g, `"`)
+
+  return html
+}
+
+// 打开微信公众号配置对话框
+function openWechatConfig() {
+  if (!form.value.title || !form.value.content) {
+    toast.error(`请先填写标题和内容`)
+    return
+  }
+
+  // 自动填充一些默认值
+  wechatForm.value.digest = form.value.desc
+  wechatConfigDialogVisible.value = true
+}
+
+// 发布到微信公众号后台
+async function publishToWechat() {
+  wechatPublishing.value = true
+
+  try {
+    // 这里需要替换为实际的 access_token
+    const accessToken = `96_7PENvzZ7c6PL8TMLyhuqizOwWAFtFGvLk7v2oNZgniKBNVyuxPiG3AZwg4OZkU9e6zscEIMNOigk6FzE9XtIqDqqS_Bu3peAuXgINXAZmmPmsLFzKu8Xc6B1rcYBDJbAGALNT`
+
+    // 处理内容，将CSS变量转换为内联样式
+    const processedContent = convertCssVarsToInline(form.value.content)
+
+    // 根据环境选择 API 地址
+    const apiUrl = import.meta.env.DEV
+      ? `/cgi-bin/draft/add?access_token=${accessToken}` // 开发环境使用代理
+      : `https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${accessToken}` // 生产环境直接调用
+
+    const response = await fetch(apiUrl, {
+      method: `POST`,
+      headers: {
+        'Content-Type': `application/json`,
+      },
+      body: JSON.stringify({
+        articles: [
+          {
+            article_type: `news`,
+            title: form.value.title,
+            author: wechatForm.value.author || `作者名称`,
+            digest: wechatForm.value.digest || form.value.desc,
+            content_source_url: wechatForm.value.contentSourceUrl || `https://baidu.com`,
+            thumb_media_id: wechatForm.value.thumbMediaId || `jYWa8NiBsNmSMAhykezVJZUmjMTYS-AE9DWvBIl0qvBtqY5wJbZqDs-8gzSiyCqA`,
+            need_open_comment: wechatForm.value.needOpenComment,
+            only_fans_can_comment: wechatForm.value.onlyFansCanComment,
+            content: processedContent,
+          },
+        ],
+      }),
+    })
+
+    const result = await response.json()
+
+    if (result.errcode === 0) {
+      toast.success(`发布成功！`)
+      wechatConfigDialogVisible.value = false
+    }
+    else {
+      toast.error(`发布失败：${result.errmsg}`)
+    }
+  }
+  catch (error) {
+    console.error(`发布到微信公众号失败:`, error)
+    toast.error(`发布失败，请检查网络连接`)
+  }
+  finally {
+    wechatPublishing.value = false
+  }
 }
 
 function onUpdate(val: boolean) {
@@ -123,6 +241,17 @@ onBeforeMount(() => {
         发布
       </Button>
     </DialogTrigger>
+
+    <!-- 微信公众号发布按钮 -->
+    <Button
+      v-if="!store.isMobile"
+      variant="outline"
+      :disabled="wechatPublishing"
+      class="ml-2"
+      @click="openWechatConfig"
+    >
+      {{ wechatPublishing ? '发布中...' : '发布到公众号' }}
+    </Button>
     <DialogContent>
       <DialogHeader>
         <DialogTitle>发布</DialogTitle>
@@ -209,4 +338,66 @@ onBeforeMount(() => {
   </Dialog>
 
   <PostTaskDialog v-model:open="postTaskDialogVisible" :post="form" />
+
+  <!-- 微信公众号配置对话框 -->
+  <Dialog v-model:open="wechatConfigDialogVisible">
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>发布到微信公众号</DialogTitle>
+      </DialogHeader>
+
+      <div class="w-full flex items-center gap-4">
+        <Label for="wechat-author" class="w-16 text-end">
+          作者
+        </Label>
+        <Input id="wechat-author" v-model="wechatForm.author" placeholder="作者名称" />
+      </div>
+
+      <div class="w-full flex items-start gap-4">
+        <Label for="wechat-digest" class="w-16 text-end">
+          摘要
+        </Label>
+        <Textarea id="wechat-digest" v-model="wechatForm.digest" placeholder="文章摘要内容" />
+      </div>
+
+      <div class="w-full flex items-center gap-4">
+        <Label for="wechat-url" class="w-16 text-end">
+          原文链接
+        </Label>
+        <Input id="wechat-url" v-model="wechatForm.contentSourceUrl" placeholder="https://baidu.com" />
+      </div>
+
+      <div class="w-full flex items-center gap-4">
+        <Label for="wechat-thumb" class="w-16 text-end">
+          封面ID
+        </Label>
+        <Input id="wechat-thumb" v-model="wechatForm.thumbMediaId" placeholder="thumb_media_id" />
+      </div>
+
+      <div class="w-full flex items-center gap-4">
+        <Label class="w-16 text-end">
+          评论设置
+        </Label>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-2">
+            <input v-model="wechatForm.needOpenComment" type="checkbox" :true-value="1" :false-value="0">
+            <span class="text-sm">开启评论</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input v-model="wechatForm.onlyFansCanComment" type="checkbox" :true-value="1" :false-value="0">
+            <span class="text-sm">仅粉丝可评论</span>
+          </label>
+        </div>
+      </div>
+
+      <DialogFooter>
+        <Button variant="outline" @click="wechatConfigDialogVisible = false">
+          取 消
+        </Button>
+        <Button :disabled="wechatPublishing" @click="publishToWechat">
+          {{ wechatPublishing ? '发布中...' : '确 定' }}
+        </Button>
+      </DialogFooter>
+    </DialogContent>
+  </Dialog>
 </template>
