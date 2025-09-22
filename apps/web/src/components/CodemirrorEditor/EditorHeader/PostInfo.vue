@@ -235,7 +235,7 @@ async function publishToWechat() {
 
     const result = await response.json()
 
-    if (result.errcode === 0) {
+    if (result.media_id) {
       toast.success(`发布成功！`)
       wechatConfigDialogVisible.value = false
     }
