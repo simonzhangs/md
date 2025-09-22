@@ -143,13 +143,65 @@ function openWechatConfig() {
   wechatConfigDialogVisible.value = true
 }
 
+// 获取微信公众号 access_token
+async function getWechatAccessToken(): Promise<string> {
+  try {
+    // 从 localStorage 获取公众号配置
+    const mpConfig = localStorage.getItem(`mpConfig`)
+    if (!mpConfig) {
+      throw new Error(`请先配置公众号图床信息`)
+    }
+
+    const config = JSON.parse(mpConfig)
+    const { appID, appsecret } = config
+
+    if (!appID || !appsecret) {
+      throw new Error(`请先配置公众号 AppID 和 AppSecret`)
+    }
+
+    // 检查本地缓存的 token
+    const cachedData = localStorage.getItem(`mpToken:${appID}`)
+    if (cachedData) {
+      const token = JSON.parse(cachedData)
+      if (token.expire && token.expire > new Date().getTime()) {
+        return token.access_token
+      }
+    }
+
+    // 获取新的 access_token
+    const tokenUrl = import.meta.env.DEV
+      ? `/cgi-bin/token` // 开发环境使用代理
+      : `https://api.weixin.qq.com/cgi-bin/token` // 生产环境直接调用
+
+    const response = await fetch(`${tokenUrl}?grant_type=client_credential&appid=${appID}&secret=${appsecret}`)
+    const result = await response.json()
+
+    if (result.access_token) {
+      // 缓存 token
+      const tokenInfo = {
+        ...result,
+        expire: new Date().getTime() + result.expires_in * 1000,
+      }
+      localStorage.setItem(`mpToken:${appID}`, JSON.stringify(tokenInfo))
+      return result.access_token
+    }
+    else {
+      throw new Error(`获取 access_token 失败：${result.errmsg || `未知错误`}`)
+    }
+  }
+  catch (error) {
+    console.error(`获取 access_token 失败:`, error)
+    throw error
+  }
+}
+
 // 发布到微信公众号后台
 async function publishToWechat() {
   wechatPublishing.value = true
 
   try {
-    // 这里需要替换为实际的 access_token
-    const accessToken = `96_7PENvzZ7c6PL8TMLyhuqizOwWAFtFGvLk7v2oNZgniKBNVyuxPiG3AZwg4OZkU9e6zscEIMNOigk6FzE9XtIqDqqS_Bu3peAuXgINXAZmmPmsLFzKu8Xc6B1rcYBDJbAGALNT`
+    // 动态获取 access_token
+    const accessToken = await getWechatAccessToken()
 
     // 处理内容，将CSS变量转换为内联样式
     const processedContent = convertCssVarsToInline(form.value.content)
@@ -193,7 +245,17 @@ async function publishToWechat() {
   }
   catch (error) {
     console.error(`发布到微信公众号失败:`, error)
-    toast.error(`发布失败，请检查网络连接`)
+    if (error instanceof Error) {
+      if (error.message.includes(`配置`)) {
+        toast.error(error.message)
+      }
+      else {
+        toast.error(`发布失败：${error.message}`)
+      }
+    }
+    else {
+      toast.error(`发布失败，请检查网络连接`)
+    }
   }
   finally {
     wechatPublishing.value = false
