@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Post, PostAccount } from '@md/shared/types'
-import { Check, Info } from 'lucide-vue-next'
+import { Check, ExternalLink, Info } from 'lucide-vue-next'
 import { CheckboxIndicator, CheckboxRoot, Primitive } from 'radix-vue'
 import { useStore } from '@/stores'
 import { toast } from '@/utils/toast'
@@ -34,6 +34,8 @@ const wechatForm = ref({
 
 const wechatPublishing = ref(false)
 const wechatConfigDialogVisible = ref(false)
+const wechatSuccessDialogVisible = ref(false)
+const draftUrl = ref(``)
 
 const allowPost = computed(() => extensionInstalled.value && form.value.accounts.some(a => a.checked))
 
@@ -223,7 +225,7 @@ async function publishToWechat() {
             title: form.value.title,
             author: wechatForm.value.author || `作者名称`,
             digest: wechatForm.value.digest || form.value.desc,
-            content_source_url: wechatForm.value.contentSourceUrl || `https://baidu.com`,
+            content_source_url: wechatForm.value.contentSourceUrl || ``,
             thumb_media_id: wechatForm.value.thumbMediaId || `jYWa8NiBsNmSMAhykezVJZUmjMTYS-AE9DWvBIl0qvBtqY5wJbZqDs-8gzSiyCqA`,
             need_open_comment: wechatForm.value.needOpenComment,
             only_fans_can_comment: wechatForm.value.onlyFansCanComment,
@@ -236,8 +238,17 @@ async function publishToWechat() {
     const result = await response.json()
 
     if (result.media_id) {
+      // 构建草稿地址
+      const mpConfig = JSON.parse(localStorage.getItem(`mpConfig`) || `{}`)
+      const appID = mpConfig.appID
+      if (appID) {
+        // 微信公众号管理后台地址
+        draftUrl.value = `https://mp.weixin.qq.com/cgi-bin/home`
+      }
+
       toast.success(`发布成功！`)
       wechatConfigDialogVisible.value = false
+      wechatSuccessDialogVisible.value = true
     }
     else {
       toast.error(`发布失败：${result.errmsg}`)
@@ -460,6 +471,35 @@ onBeforeMount(() => {
           {{ wechatPublishing ? '发布中...' : '确 定' }}
         </Button>
       </DialogFooter>
+    </DialogContent>
+  </Dialog>
+
+  <!-- 微信公众号发布成功弹窗 -->
+  <Dialog v-model:open="wechatSuccessDialogVisible">
+    <DialogContent>
+      <DialogHeader>
+        <DialogTitle>发布成功</DialogTitle>
+      </DialogHeader>
+
+      <div class="space-y-4">
+        <div class="text-center">
+          <Check class="h-12 w-12 text-green-500 mx-auto mb-4" />
+          <p class="text-lg font-medium">
+            文章已成功发布到微信公众号
+          </p>
+          <p class="text-sm text-gray-600 mt-2">
+            <a
+              href="https://mp.weixin.qq.com/cgi-bin/home"
+              target="_blank"
+              rel="noopener noreferrer"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
+            >
+              打开微信公众号管理后台
+              <ExternalLink class="h-4 w-4 opacity-90" />
+            </a>
+          </p>
+        </div>
+      </div>
     </DialogContent>
   </Dialog>
 </template>
