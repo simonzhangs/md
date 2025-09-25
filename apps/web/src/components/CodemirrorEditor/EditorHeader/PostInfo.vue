@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import type { Post, PostAccount } from '@md/shared/types'
-import { Check, ExternalLink, Info } from 'lucide-vue-next'
+import { Check, Info } from 'lucide-vue-next'
 import { CheckboxIndicator, CheckboxRoot, Primitive } from 'radix-vue'
 import { useStore } from '@/stores'
-import { toast } from '@/utils/toast'
+import WeChatPublish from './WeChatPublish.vue'
 
 const store = useStore()
 const { output, editor } = storeToRefs(store)
@@ -21,21 +21,6 @@ const form = ref<Post>({
   markdown: ``,
   accounts: [] as PostAccount[],
 })
-
-// 微信公众号相关
-const wechatForm = ref({
-  author: ``,
-  digest: ``,
-  contentSourceUrl: ``,
-  thumbMediaId: ``,
-  needOpenComment: 1,
-  onlyFansCanComment: 0,
-})
-
-const wechatPublishing = ref(false)
-const wechatConfigDialogVisible = ref(false)
-const wechatSuccessDialogVisible = ref(false)
-const draftUrl = ref(``)
 
 const allowPost = computed(() => extensionInstalled.value && form.value.accounts.some(a => a.checked))
 
@@ -70,12 +55,7 @@ async function prePost() {
     console.log(`error`, error)
   }
   finally {
-    form.value = {
-      ...auto,
-    }
-
-    // 同时填充微信公众号表单的默认值
-    wechatForm.value.digest = auto.desc
+    form.value = { ...auto }
   }
 }
 
@@ -99,178 +79,6 @@ function post() {
   form.value.accounts = form.value.accounts.filter(a => a.checked)
   postTaskDialogVisible.value = true
   dialogVisible.value = false
-}
-
-// CSS变量转换为内联样式的函数
-function convertCssVarsToInline(html: string): string {
-  // 定义CSS变量到实际值的映射
-  const cssVars: Record<string, string> = {
-    '--md-primary-color': `#0F4C81`,
-    '--foreground': `0, 0%, 0%`, // 默认黑色
-  }
-
-  // 移除<style>标签及其内容
-  html = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ``)
-
-  // 移除CSS变量定义
-  html = html.replace(/--[a-z0-9-]+:[^;]+;/gi, ``)
-
-  // 替换CSS变量引用
-  Object.keys(cssVars).forEach((varName) => {
-    const regex = new RegExp(`var\\(${varName}\\)`, `g`)
-    html = html.replace(regex, cssVars[varName])
-  })
-
-  // 处理hsl(var(--foreground))的情况
-  html = html.replace(/hsl\(var\(--foreground\)\)/g, `hsl(0, 0%, 0%)`)
-
-  // 清理多余的分号和空格
-  html = html.replace(/;\s*;/g, `;`)
-  html = html.replace(/\s+/g, ` `)
-  html = html.replace(/"\s+/g, `"`)
-  html = html.replace(/\s+"/g, `"`)
-
-  return html
-}
-
-// 打开微信公众号配置对话框
-function openWechatConfig() {
-  if (!form.value.title || !form.value.content) {
-    toast.error(`请先填写标题和内容`)
-    return
-  }
-
-  // 自动填充一些默认值
-  wechatForm.value.digest = form.value.desc
-  wechatConfigDialogVisible.value = true
-}
-
-// 获取微信公众号 access_token
-async function getWechatAccessToken(): Promise<string> {
-  try {
-    // 从 localStorage 获取公众号配置
-    const mpConfig = localStorage.getItem(`mpConfig`)
-    if (!mpConfig) {
-      throw new Error(`请先配置公众号图床信息`)
-    }
-
-    const config = JSON.parse(mpConfig)
-    const { appID, appsecret } = config
-
-    if (!appID || !appsecret) {
-      throw new Error(`请先配置公众号 AppID 和 AppSecret`)
-    }
-
-    // 检查本地缓存的 token
-    const cachedData = localStorage.getItem(`mpToken:${appID}`)
-    if (cachedData) {
-      const token = JSON.parse(cachedData)
-      if (token.expire && token.expire > new Date().getTime()) {
-        return token.access_token
-      }
-    }
-
-    // 获取新的 access_token
-    const tokenUrl = import.meta.env.DEV
-      ? `/cgi-bin/token` // 开发环境使用代理
-      : `https://api.weixin.qq.com/cgi-bin/token` // 生产环境直接调用
-
-    const response = await fetch(`${tokenUrl}?grant_type=client_credential&appid=${appID}&secret=${appsecret}`)
-    const result = await response.json()
-
-    if (result.access_token) {
-      // 缓存 token
-      const tokenInfo = {
-        ...result,
-        expire: new Date().getTime() + result.expires_in * 1000,
-      }
-      localStorage.setItem(`mpToken:${appID}`, JSON.stringify(tokenInfo))
-      return result.access_token
-    }
-    else {
-      throw new Error(`获取 access_token 失败：${result.errmsg || `未知错误`}`)
-    }
-  }
-  catch (error) {
-    console.error(`获取 access_token 失败:`, error)
-    throw error
-  }
-}
-
-// 发布到微信公众号后台
-async function publishToWechat() {
-  wechatPublishing.value = true
-
-  try {
-    // 动态获取 access_token
-    const accessToken = await getWechatAccessToken()
-
-    // 处理内容，将CSS变量转换为内联样式
-    const processedContent = convertCssVarsToInline(form.value.content)
-
-    // 根据环境选择 API 地址
-    const apiUrl = import.meta.env.DEV
-      ? `/cgi-bin/draft/add?access_token=${accessToken}` // 开发环境使用代理
-      : `https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${accessToken}` // 生产环境直接调用
-
-    const response = await fetch(apiUrl, {
-      method: `POST`,
-      headers: {
-        'Content-Type': `application/json`,
-      },
-      body: JSON.stringify({
-        articles: [
-          {
-            article_type: `news`,
-            title: form.value.title,
-            author: wechatForm.value.author || `作者名称`,
-            digest: wechatForm.value.digest || form.value.desc,
-            content_source_url: wechatForm.value.contentSourceUrl || ``,
-            thumb_media_id: wechatForm.value.thumbMediaId || `jYWa8NiBsNmSMAhykezVJZUmjMTYS-AE9DWvBIl0qvBtqY5wJbZqDs-8gzSiyCqA`,
-            need_open_comment: wechatForm.value.needOpenComment,
-            only_fans_can_comment: wechatForm.value.onlyFansCanComment,
-            content: processedContent,
-          },
-        ],
-      }),
-    })
-
-    const result = await response.json()
-
-    if (result.media_id) {
-      // 构建草稿地址
-      const mpConfig = JSON.parse(localStorage.getItem(`mpConfig`) || `{}`)
-      const appID = mpConfig.appID
-      if (appID) {
-        // 微信公众号管理后台地址
-        draftUrl.value = `https://mp.weixin.qq.com/cgi-bin/home`
-      }
-
-      toast.success(`发布成功！`)
-      wechatConfigDialogVisible.value = false
-      wechatSuccessDialogVisible.value = true
-    }
-    else {
-      toast.error(`发布失败：${result.errmsg}`)
-    }
-  }
-  catch (error) {
-    console.error(`发布到微信公众号失败:`, error)
-    if (error instanceof Error) {
-      if (error.message.includes(`配置`)) {
-        toast.error(error.message)
-      }
-      else {
-        toast.error(`发布失败：${error.message}`)
-      }
-    }
-    else {
-      toast.error(`发布失败，请检查网络连接`)
-    }
-  }
-  finally {
-    wechatPublishing.value = false
-  }
 }
 
 function onUpdate(val: boolean) {
@@ -315,16 +123,12 @@ onBeforeMount(() => {
       </Button>
     </DialogTrigger>
 
-    <!-- 微信公众号发布按钮 -->
-    <Button
+    <!-- 微信公众号发布组件 -->
+    <WeChatPublish
       v-if="!store.isMobile"
-      variant="outline"
-      :disabled="wechatPublishing"
       class="ml-2"
-      @click="openWechatConfig"
-    >
-      {{ wechatPublishing ? '发布中...' : '发布到公众号' }}
-    </Button>
+    />
+
     <DialogContent>
       <DialogHeader>
         <DialogTitle>发布</DialogTitle>
@@ -412,94 +216,5 @@ onBeforeMount(() => {
 
   <PostTaskDialog v-model:open="postTaskDialogVisible" :post="form" />
 
-  <!-- 微信公众号配置对话框 -->
-  <Dialog v-model:open="wechatConfigDialogVisible">
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>发布到微信公众号</DialogTitle>
-      </DialogHeader>
-
-      <div class="w-full flex items-center gap-4">
-        <Label for="wechat-author" class="w-16 text-end">
-          作者
-        </Label>
-        <Input id="wechat-author" v-model="wechatForm.author" placeholder="作者名称" />
-      </div>
-
-      <div class="w-full flex items-start gap-4">
-        <Label for="wechat-digest" class="w-16 text-end">
-          摘要
-        </Label>
-        <Textarea id="wechat-digest" v-model="wechatForm.digest" placeholder="文章摘要内容" />
-      </div>
-
-      <div class="w-full flex items-center gap-4">
-        <Label for="wechat-url" class="w-16 text-end">
-          原文链接
-        </Label>
-        <Input id="wechat-url" v-model="wechatForm.contentSourceUrl" placeholder="https://baidu.com" />
-      </div>
-
-      <div class="w-full flex items-center gap-4">
-        <Label for="wechat-thumb" class="w-16 text-end">
-          封面ID
-        </Label>
-        <Input id="wechat-thumb" v-model="wechatForm.thumbMediaId" placeholder="thumb_media_id" />
-      </div>
-
-      <div class="w-full flex items-center gap-4">
-        <Label class="w-16 text-end">
-          评论设置
-        </Label>
-        <div class="flex gap-4">
-          <label class="flex items-center gap-2">
-            <input v-model="wechatForm.needOpenComment" type="checkbox" :true-value="1" :false-value="0">
-            <span class="text-sm">开启评论</span>
-          </label>
-          <label class="flex items-center gap-2">
-            <input v-model="wechatForm.onlyFansCanComment" type="checkbox" :true-value="1" :false-value="0">
-            <span class="text-sm">仅粉丝可评论</span>
-          </label>
-        </div>
-      </div>
-
-      <DialogFooter>
-        <Button variant="outline" @click="wechatConfigDialogVisible = false">
-          取 消
-        </Button>
-        <Button :disabled="wechatPublishing" @click="publishToWechat">
-          {{ wechatPublishing ? '发布中...' : '确 定' }}
-        </Button>
-      </DialogFooter>
-    </DialogContent>
-  </Dialog>
-
-  <!-- 微信公众号发布成功弹窗 -->
-  <Dialog v-model:open="wechatSuccessDialogVisible">
-    <DialogContent>
-      <DialogHeader>
-        <DialogTitle>发布成功</DialogTitle>
-      </DialogHeader>
-
-      <div class="space-y-4">
-        <div class="text-center">
-          <Check class="h-12 w-12 text-green-500 mx-auto mb-4" />
-          <p class="text-lg font-medium">
-            文章已成功发布到微信公众号
-          </p>
-          <p class="text-sm text-gray-600 mt-2">
-            <a
-              href="https://mp.weixin.qq.com/cgi-bin/home"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"
-            >
-              打开微信公众号管理后台
-              <ExternalLink class="h-4 w-4 opacity-90" />
-            </a>
-          </p>
-        </div>
-      </div>
-    </DialogContent>
-  </Dialog>
+  <!-- 公众号相关弹窗由独立组件内部处理 -->
 </template>
