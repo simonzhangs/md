@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Check, ExternalLink, Loader2 } from 'lucide-vue-next'
-import { useStore } from '@/stores'
+import { Check, ExternalLink, Info, Loader2 } from 'lucide-vue-next'
+import { useDisplayStore, useStore } from '@/stores'
 import { toast } from '@/utils/toast'
 
 const store = useStore()
 const { output } = storeToRefs(store)
+const displayStore = useDisplayStore()
 
 const wechatForm = ref({
   author: ``,
@@ -119,6 +120,7 @@ function openWechatConfig() {
     toast.error(`请先填写内容`)
     return
   }
+  // 打开弹窗后提示是否缺少配置
   extractTitleAndDesc()
   if (!wechatForm.value.digest)
     wechatForm.value.digest = autoDesc.value || ``
@@ -128,6 +130,38 @@ function openWechatConfig() {
   })
   wechatConfigDialogVisible.value = true
 }
+
+const mpConfigured = ref(true)
+function isMpConfigured(): boolean {
+  try {
+    const mpConfigStr = localStorage.getItem(`mpConfig`)
+    const cfg = mpConfigStr ? JSON.parse(mpConfigStr) : null
+    return Boolean(cfg?.appID && cfg?.appsecret)
+  }
+  catch {
+    return false
+  }
+}
+function openMpConfigDialog() {
+  localStorage.setItem(`imgHost`, `mp`)
+  //   wechatConfigDialogVisible.value = false
+  displayStore.toggleShowUploadImgDialog()
+}
+function recheckMpConfig() {
+  mpConfigured.value = isMpConfigured()
+  if (mpConfigured.value)
+    toast.success(`已检测到公众号图床配置`)
+  else
+    toast.error(`仍未检测到配置，请完成后再试`)
+}
+
+watch(wechatConfigDialogVisible, (open) => {
+  if (open) {
+    mpConfigured.value = isMpConfigured()
+    if (!mpConfigured.value)
+      toast.error(`未检测到公众号图床配置，请先完成配置`)
+  }
+})
 
 async function getWechatAccessToken(): Promise<string> {
   try {
@@ -344,10 +378,26 @@ async function onLocalCoverFileChange(event: Event) {
     </Button>
 
     <Dialog v-model:open="wechatConfigDialogVisible">
-      <DialogContent>
+      <DialogContent class="z-[50]">
         <DialogHeader>
           <DialogTitle>发布到微信公众号</DialogTitle>
         </DialogHeader>
+
+        <Alert v-if="!mpConfigured">
+          <Info class="h-4 w-4" />
+          <AlertTitle>需要先配置公众号图床</AlertTitle>
+          <AlertDescription>
+            请先完成 appID 与 appsecret 的配置。
+            <div class="mt-2 flex items-center gap-2">
+              <Button size="sm" variant="outline" @click="openMpConfigDialog">
+                打开配置
+              </Button>
+              <Button size="sm" variant="ghost" @click="recheckMpConfig">
+                我已配置，重新检测
+              </Button>
+            </div>
+          </AlertDescription>
+        </Alert>
 
         <div class="w-full flex items-center gap-4">
           <Label for="wechat-author" class="w-16 text-end">
@@ -428,7 +478,7 @@ async function onLocalCoverFileChange(event: Event) {
           <Button variant="outline" @click="wechatConfigDialogVisible = false">
             取 消
           </Button>
-          <Button :disabled="wechatPublishing" @click="publishToWechat">
+          <Button :disabled="wechatPublishing || !mpConfigured" @click="publishToWechat">
             {{ wechatPublishing ? '发布中...' : '确 定' }}
           </Button>
         </DialogFooter>
@@ -436,7 +486,7 @@ async function onLocalCoverFileChange(event: Event) {
     </Dialog>
 
     <Dialog v-model:open="wechatSuccessDialogVisible">
-      <DialogContent>
+      <DialogContent class="z-[1000]">
         <DialogHeader>
           <DialogTitle>发布成功</DialogTitle>
         </DialogHeader>
