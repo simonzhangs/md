@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ExternalLink } from 'lucide-vue-next'
+import { Check, ExternalLink, Loader2 } from 'lucide-vue-next'
 import { useStore } from '@/stores'
 import { toast } from '@/utils/toast'
 
@@ -10,6 +10,9 @@ const wechatForm = ref({
   author: ``,
   digest: ``,
   contentSourceUrl: ``,
+  // 封面图链接（用户可见/可输入）
+  coverUrl: ``,
+  // 内部使用的微信素材ID
   thumbMediaId: ``,
   needOpenComment: 1,
   onlyFansCanComment: 0,
@@ -29,6 +32,10 @@ const disabledBtn = computed(() => {
   return wechatPublishing.value || content.trim() === ``
 })
 
+const uploadingThumb = ref(false)
+const fileInputRef = ref<HTMLInputElement | null>(null)
+let coverUrlDebounceTimer: number | undefined
+
 function extractTitleAndDesc() {
   try {
     const headingLevels = [1, 2, 3, 4, 5, 6]
@@ -40,11 +47,15 @@ function extractTitleAndDesc() {
 
     const firstParagraph = document.querySelector(`#output p`) as HTMLElement | null
     const derivedDesc = (firstParagraph?.textContent || ``).trim()
+    const firstImg = document.querySelector(`#output img`) as HTMLImageElement | null
+    const derivedCover = firstImg?.src || ``
 
     autoTitle.value = derivedTitle
     autoDesc.value = derivedDesc
     if (!wechatForm.value.digest)
       wechatForm.value.digest = derivedDesc
+    if (!wechatForm.value.coverUrl && derivedCover)
+      wechatForm.value.coverUrl = derivedCover
   }
   catch (e) {
     console.warn(`extractTitleAndDesc error`, e)
@@ -60,6 +71,27 @@ watch(
     }
   },
   { immediate: false },
+)
+
+// 封面链接变化时，清空已得的 media_id，等待重新上传
+watch(
+  () => wechatForm.value.coverUrl,
+  (val) => {
+    wechatForm.value.thumbMediaId = ``
+    const url = (val || ``).trim()
+    if (!url)
+      return
+    if (uploadingThumb.value)
+      return
+    if (coverUrlDebounceTimer)
+      clearTimeout(coverUrlDebounceTimer)
+    coverUrlDebounceTimer = window.setTimeout(() => {
+      // 若期间用户又清空了，跳过
+      if (!wechatForm.value.coverUrl?.trim())
+        return
+      uploadThumbIfNeeded().catch(() => {})
+    }, 600)
+  },
 )
 
 function convertCssVarsToInline(html: string): string {
@@ -90,6 +122,10 @@ function openWechatConfig() {
   extractTitleAndDesc()
   if (!wechatForm.value.digest)
     wechatForm.value.digest = autoDesc.value || ``
+  // 预取并上传封面图，获取 thumb_media_id
+  uploadThumbIfNeeded().catch((err) => {
+    console.warn(`uploadThumbIfNeeded error`, err)
+  })
   wechatConfigDialogVisible.value = true
 }
 
@@ -139,6 +175,14 @@ async function getWechatAccessToken(): Promise<string> {
 async function publishToWechat() {
   wechatPublishing.value = true
   try {
+    if (uploadingThumb.value) {
+      toast.error(`封面上传中，请稍后再试`)
+      return
+    }
+    if (!wechatForm.value.thumbMediaId) {
+      toast.error(`请先提供封面并上传到微信后台`)
+      return
+    }
     const accessToken = await getWechatAccessToken()
     const processedContent = convertCssVarsToInline(output.value || ``)
     const articleTitle = autoTitle.value
@@ -159,7 +203,7 @@ async function publishToWechat() {
             author: wechatForm.value.author || `作者名称`,
             digest: articleDigest,
             content_source_url: wechatForm.value.contentSourceUrl || ``,
-            thumb_media_id: wechatForm.value.thumbMediaId || `jYWa8NiBsNmSMAhykezVJZUmjMTYS-AE9DWvBIl0qvBtqY5wJbZqDs-8gzSiyCqA`,
+            thumb_media_id: wechatForm.value.thumbMediaId || ``,
             need_open_comment: wechatForm.value.needOpenComment,
             only_fans_can_comment: wechatForm.value.onlyFansCanComment,
             content: processedContent,
@@ -199,6 +243,94 @@ async function publishToWechat() {
     wechatPublishing.value = false
   }
 }
+
+// 从 #output 提取第一张图片并上传到公众号，返回 media_id
+async function uploadThumbIfNeeded(): Promise<string | undefined> {
+  try {
+    if (wechatForm.value.thumbMediaId)
+      return wechatForm.value.thumbMediaId
+
+    const sourceUrl = (wechatForm.value.coverUrl || ``).trim()
+    const imgSrc = sourceUrl || (document.querySelector(`#output img`) as HTMLImageElement | null)?.src || ``
+    if (!imgSrc)
+      return
+
+    uploadingThumb.value = true
+    const res = await fetch(imgSrc)
+    const blob = await res.blob()
+
+    // 使用原文件名或默认名
+    const urlObj = new URL(imgSrc, window.location.href)
+    const pathname = urlObj.pathname
+    const originalName = pathname.split(`/`).pop() || `cover.jpg`
+    const file = new File([blob], originalName, { type: blob.type || `image/jpeg` })
+
+    const accessToken = await getWechatAccessToken()
+    const formdata = new FormData()
+    formdata.append(`media`, file, file.name)
+
+    // 走函数代理，避免直连跨域与泄露
+    const apiPath = `/cgi-bin/material/add_material?access_token=${accessToken}&type=image`
+    const uploadResp = await fetch(apiPath, { method: `POST`, body: formdata })
+    const json = await uploadResp.json()
+
+    if (json.media_id) {
+      wechatForm.value.thumbMediaId = json.media_id
+      return json.media_id as string
+    }
+
+    // 若失败，给出提示但不阻断发布（允许用户手动填）
+    if (json.errmsg)
+      toast.error(`封面上传失败：${json.errmsg}`)
+  }
+  catch (e: any) {
+    toast.error(`封面上传失败：${e?.message || e}`)
+  }
+  finally {
+    uploadingThumb.value = false
+  }
+}
+
+function pickLocalCoverImage() {
+  if (uploadingThumb.value)
+    return
+  fileInputRef.value?.click()
+}
+
+async function onLocalCoverFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (!input.files || !input.files.length)
+    return
+  const file = input.files[0]
+  try {
+    uploadingThumb.value = true
+    const previewUrl = URL.createObjectURL(file)
+    wechatForm.value.coverUrl = previewUrl
+
+    const accessToken = await getWechatAccessToken()
+    const formdata = new FormData()
+    formdata.append(`media`, file, file.name)
+    const apiPath = `/cgi-bin/material/add_material?access_token=${accessToken}&type=image`
+    const uploadResp = await fetch(apiPath, { method: `POST`, body: formdata })
+    const json = await uploadResp.json()
+    if (json.media_id) {
+      wechatForm.value.thumbMediaId = json.media_id
+      toast.success(`封面已上传微信后台`)
+    }
+    else if (json.errmsg) {
+      toast.error(`封面上传失败：${json.errmsg}`)
+    }
+  }
+  catch (e: any) {
+    toast.error(`封面上传失败：${e?.message || e}`)
+  }
+  finally {
+    uploadingThumb.value = false
+    // 重置 input 值以便可重复选择同一文件
+    if (input)
+      input.value = ``
+  }
+}
 </script>
 
 <template>
@@ -232,17 +364,48 @@ async function publishToWechat() {
         </div>
 
         <div class="w-full flex items-center gap-4">
-          <Label for="wechat-url" class="w-16 text-end">
-            原文链接
+          <Label for="wechat-cover" class="w-16 text-end">
+            封面链接
           </Label>
-          <Input id="wechat-url" v-model="wechatForm.contentSourceUrl" placeholder="" />
+          <div class="flex-1 flex items-center gap-2">
+            <Input
+              id="wechat-cover"
+              v-model="wechatForm.coverUrl"
+              :disabled="uploadingThumb"
+              placeholder="https://..."
+            />
+            <span class="text-sm text-muted-foreground select-none inline-flex items-center gap-1">
+              <Loader2 v-if="uploadingThumb" class="h-4 w-4 animate-spin" />
+              <Check v-else-if="wechatForm.thumbMediaId" class="h-4 w-4 text-green-500" />
+              <span class="text-xs">
+                {{ uploadingThumb ? '自动上传中…' : (wechatForm.thumbMediaId ? '已上传微信后台' : '将自动上传到微信后台') }}
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <div v-if="!wechatForm.coverUrl" class="w-full flex items-center gap-4">
+          <div class="w-16 text-end" />
+          <div class="flex-1 flex items-center gap-2">
+            <input
+              ref="fileInputRef"
+              type="file"
+              accept="image/*"
+              class="hidden"
+              @change="onLocalCoverFileChange"
+            >
+            <Button variant="outline" :disabled="uploadingThumb" @click="pickLocalCoverImage">
+              {{ uploadingThumb ? '上传中…' : '上传图片' }}
+            </Button>
+            <span class="text-xs text-muted-foreground">未提取到封面，请上传本地图片或在上方输入图片地址</span>
+          </div>
         </div>
 
         <div class="w-full flex items-center gap-4">
-          <Label for="wechat-thumb" class="w-16 text-end">
-            封面ID
+          <Label for="wechat-url" class="w-18 text-end">
+            原文链接
           </Label>
-          <Input id="wechat-thumb" v-model="wechatForm.thumbMediaId" placeholder="thumb_media_id" />
+          <Input id="wechat-url" v-model="wechatForm.contentSourceUrl" placeholder="" />
         </div>
 
         <div class="w-full flex items-center gap-4">
