@@ -2,7 +2,7 @@
 import { Check, ExternalLink, Info, Loader2 } from 'lucide-vue-next'
 import { useDisplayStore, useStore } from '@/stores'
 import { toast } from '@/utils/toast'
-import { getMpAccessToken } from '@/utils/wechat-publish'
+import { getMpAccessToken, getMpCoverMediaId } from '@/utils/wechat-publish'
 
 const store = useStore()
 const { output } = storeToRefs(store)
@@ -264,23 +264,16 @@ async function uploadThumbIfNeeded(): Promise<string | undefined> {
     const originalName = pathname.split(`/`).pop() || `cover.jpg`
     const file = new File([blob], originalName, { type: blob.type || `image/jpeg` })
 
-    const accessToken = await getMpAccessToken()
-    const formdata = new FormData()
-    formdata.append(`media`, file, file.name)
+    const { media_id, errmsg } = await getMpCoverMediaId(file)
 
-    // 走函数代理，避免直连跨域与泄露
-    const apiPath = `/cgi-bin/material/add_material?access_token=${accessToken}&type=image`
-    const uploadResp = await fetch(apiPath, { method: `POST`, body: formdata })
-    const json = await uploadResp.json()
-
-    if (json.media_id) {
-      wechatForm.value.thumbMediaId = json.media_id
-      return json.media_id as string
+    if (media_id) {
+      wechatForm.value.thumbMediaId = media_id
+      return media_id as string
     }
 
     // 若失败，给出提示但不阻断发布（允许用户手动填）
-    if (json.errmsg)
-      toast.error(`封面上传失败：${json.errmsg}`)
+    if (errmsg)
+      toast.error(`封面上传失败：${errmsg}`)
   }
   catch (e: any) {
     toast.error(`封面上传失败：${e?.message || e}`)
@@ -306,12 +299,8 @@ async function onLocalCoverFileChange(event: Event) {
     const previewUrl = URL.createObjectURL(file)
     wechatForm.value.coverUrl = previewUrl
 
-    const accessToken = await getMpAccessToken()
-    const formdata = new FormData()
-    formdata.append(`media`, file, file.name)
-    const apiPath = `/cgi-bin/material/add_material?access_token=${accessToken}&type=image`
-    const uploadResp = await fetch(apiPath, { method: `POST`, body: formdata })
-    const json = await uploadResp.json()
+    const json = await getMpCoverMediaId(file)
+
     if (json.media_id) {
       wechatForm.value.thumbMediaId = json.media_id
       toast.success(`封面已上传微信后台`)
