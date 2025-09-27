@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { Check, ExternalLink, Info, Loader2 } from 'lucide-vue-next'
 import { useDisplayStore, useStore } from '@/stores'
+import { processClipboardContent } from '@/utils'
 import { toast } from '@/utils/toast'
 import { addMpArticleDraft, getMpCoverMediaId } from '@/utils/wechat-publish'
 
 const store = useStore()
-const { output } = storeToRefs(store)
+const { output, primaryColor } = storeToRefs(store)
 const displayStore = useDisplayStore()
 
 const wechatForm = ref({
@@ -55,12 +56,9 @@ function extractTitleAndDesc() {
     const firstImg = document.querySelector(`#output img`) as HTMLImageElement | null
     const derivedCover = firstImg?.src || ``
 
-    if (!wechatForm.value.title)
-      wechatForm.value.title = derivedTitle
-    if (!wechatForm.value.digest)
-      wechatForm.value.digest = derivedDesc
-    if (!wechatForm.value.coverUrl && derivedCover)
-      wechatForm.value.coverUrl = derivedCover
+    wechatForm.value.title = derivedTitle
+    wechatForm.value.digest = derivedDesc
+    wechatForm.value.coverUrl = derivedCover
   }
   catch (e) {
     console.warn(`extractTitleAndDesc error`, e)
@@ -98,25 +96,6 @@ watch(
     }, 600)
   },
 )
-
-function convertCssVarsToInline(html: string): string {
-  const cssVars: Record<string, string> = {
-    '--md-primary-color': `#0F4C81`,
-    '--foreground': `0, 0%, 0%`,
-  }
-  html = html.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ``)
-  html = html.replace(/--[a-z0-9-]+:[^;]+;/gi, ``)
-  Object.keys(cssVars).forEach((varName) => {
-    const regex = new RegExp(`var\\(${varName}\\)`, `g`)
-    html = html.replace(regex, cssVars[varName])
-  })
-  html = html.replace(/hsl\(var\(--foreground\)\)/g, `hsl(0, 0%, 0%)`)
-  html = html.replace(/;\s*;/g, `;`)
-  html = html.replace(/\s+/g, ` `)
-  html = html.replace(/"\s+/g, `"`)
-  html = html.replace(/\s+"/g, `"`)
-  return html
-}
 
 function openWechatConfig() {
   const content = output.value || ``
@@ -175,9 +154,34 @@ async function publishToWechat() {
       toast.error(`请先提供封面并上传到微信后台`)
       return
     }
-    console.log(`convertCssVarsToInline before`, output.value)
-    const processedContent = convertCssVarsToInline(output.value || ``)
-    console.log(`convertCssVarsToInline after`, processedContent)
+
+    /**
+     * 处理HTML内容中的img标签，将wsrv.nl代理链接替换为原始解码后的地址
+     * @param html 包含img标签的HTML字符串
+     * @returns 处理后的HTML字符串
+     */
+    function processImageSrc(html: string): string {
+    // 正则匹配img标签中的src属性，捕获url=后面的编码内容
+      const imgSrcRegex = /(<img[^>]*src=")https:\/\/wsrv\.nl\?url=([^"]*)("[^>]*>)/g
+
+      // 替换匹配的内容：解码url参数值并作为新的src
+      return html.replace(imgSrcRegex, (match, prefix, encodedUrl, suffix) => {
+        try {
+          // 解码URL中的特殊字符（如%3A->:，%2F->/）
+          const decodedUrl = decodeURIComponent(encodedUrl)
+          // 拼接成新的img标签
+          return `${prefix}${decodedUrl}${suffix}`
+        }
+        catch (e) {
+          console.error(`URL解码失败:`, e)
+          // 解码失败时保留原始内容
+          return match
+        }
+      })
+    }
+
+    const processedContent = await processClipboardContent(primaryColor.value)
+    const finalContent = processImageSrc(processedContent)
 
     const draftContent = {
       title: wechatForm.value.title,
@@ -187,7 +191,7 @@ async function publishToWechat() {
       thumb_media_id: wechatForm.value.thumbMediaId || ``,
       need_open_comment: wechatForm.value.needOpenComment,
       only_fans_can_comment: wechatForm.value.onlyFansCanComment,
-      content: processedContent,
+      content: finalContent,
     }
 
     const result = await addMpArticleDraft(draftContent)
@@ -439,7 +443,7 @@ async function onLocalCoverFileChange(event: Event) {
             </p>
             <p class="text-sm text-gray-600 mt-2">
               <a
-                href="https://mp.weixin.qq.com/cgi-bin/home"
+                href="https://mp.weixin.qq.com"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-blue-600 text-white hover:bg-blue-700 transition-colors"

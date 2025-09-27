@@ -331,4 +331,5 @@ export async function processClipboardContent(primaryColor: string) {
     grand.innerHTML = ``
     grand.appendChild(section)
   })
+  return clipboardDiv.innerHTML
 }
