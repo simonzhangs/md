@@ -291,6 +291,12 @@ async function uploadThumbIfNeeded(): Promise<string | undefined> {
     if (!imgSrc)
       return
 
+    // 匹配图片链接，支持本地或者远程的图片格式
+    if (!imgSrc.match(/^https?:\/\//) && !imgSrc.match(/^blob:\//)) {
+      toast.error(`封面链接格式不正确，请输入正确的图片链接`)
+      return
+    }
+
     uploadingThumb.value = true
     const res = await fetch(imgSrc)
     const blob = await res.blob()
