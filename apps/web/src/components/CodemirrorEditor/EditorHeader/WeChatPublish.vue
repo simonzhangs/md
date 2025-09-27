@@ -2,6 +2,7 @@
 import { Check, ExternalLink, Info, Loader2 } from 'lucide-vue-next'
 import { useDisplayStore, useStore } from '@/stores'
 import { toast } from '@/utils/toast'
+import { getMpAccessToken } from '@/utils/wechat-publish'
 
 const store = useStore()
 const { output } = storeToRefs(store)
@@ -146,7 +147,6 @@ function isMpConfigured(): boolean {
 }
 function openMpConfigDialog() {
   localStorage.setItem(`imgHost`, `mp`)
-  //   wechatConfigDialogVisible.value = false
   displayStore.toggleShowUploadImgDialog()
 }
 function recheckMpConfig() {
@@ -165,49 +165,6 @@ watch(wechatConfigDialogVisible, (open) => {
   }
 })
 
-async function getWechatAccessToken(): Promise<string> {
-  try {
-    const mpConfig = localStorage.getItem(`mpConfig`)
-    if (!mpConfig)
-      throw new Error(`请先配置公众号图床信息`)
-
-    const config = JSON.parse(mpConfig)
-    const { appID, appsecret } = config
-    if (!appID || !appsecret)
-      throw new Error(`请先配置公众号 AppID 和 AppSecret`)
-
-    const cachedData = localStorage.getItem(`mpToken:${appID}`)
-    if (cachedData) {
-      const token = JSON.parse(cachedData)
-      if (token.expire && token.expire > new Date().getTime())
-        return token.access_token
-    }
-
-    const tokenUrl = import.meta.env.DEV
-      ? `/cgi-bin/token`
-      : `https://api.weixin.qq.com/cgi-bin/token`
-
-    const response = await fetch(`${tokenUrl}?grant_type=client_credential&appid=${appID}&secret=${appsecret}`)
-    const result = await response.json()
-
-    if (result.access_token) {
-      const tokenInfo = {
-        ...result,
-        expire: new Date().getTime() + result.expires_in * 1000,
-      }
-      localStorage.setItem(`mpToken:${appID}`, JSON.stringify(tokenInfo))
-      return result.access_token
-    }
-    else {
-      throw new Error(`获取 access_token 失败：${result.errmsg || `未知错误`}`)
-    }
-  }
-  catch (error) {
-    console.error(`获取 access_token 失败:`, error)
-    throw error
-  }
-}
-
 async function publishToWechat() {
   wechatPublishing.value = true
   try {
@@ -219,7 +176,7 @@ async function publishToWechat() {
       toast.error(`请先提供封面并上传到微信后台`)
       return
     }
-    const accessToken = await getWechatAccessToken()
+    const accessToken = await getMpAccessToken()
     const processedContent = convertCssVarsToInline(output.value || ``)
     const articleTitle = wechatForm.value.title
     const articleDigest = wechatForm.value.digest
@@ -307,7 +264,7 @@ async function uploadThumbIfNeeded(): Promise<string | undefined> {
     const originalName = pathname.split(`/`).pop() || `cover.jpg`
     const file = new File([blob], originalName, { type: blob.type || `image/jpeg` })
 
-    const accessToken = await getWechatAccessToken()
+    const accessToken = await getMpAccessToken()
     const formdata = new FormData()
     formdata.append(`media`, file, file.name)
 
@@ -349,7 +306,7 @@ async function onLocalCoverFileChange(event: Event) {
     const previewUrl = URL.createObjectURL(file)
     wechatForm.value.coverUrl = previewUrl
 
-    const accessToken = await getWechatAccessToken()
+    const accessToken = await getMpAccessToken()
     const formdata = new FormData()
     formdata.append(`media`, file, file.name)
     const apiPath = `/cgi-bin/material/add_material?access_token=${accessToken}&type=image`
