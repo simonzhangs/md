@@ -2,7 +2,7 @@
 import { Check, ExternalLink, Info, Loader2 } from 'lucide-vue-next'
 import { useDisplayStore, useStore } from '@/stores'
 import { toast } from '@/utils/toast'
-import { getMpAccessToken, getMpCoverMediaId } from '@/utils/wechat-publish'
+import { addMpArticleDraft, getMpCoverMediaId } from '@/utils/wechat-publish'
 
 const store = useStore()
 const { output } = storeToRefs(store)
@@ -24,7 +24,6 @@ const wechatForm = ref({
 const wechatPublishing = ref(false)
 const wechatConfigDialogVisible = ref(false)
 const wechatSuccessDialogVisible = ref(false)
-const draftUrl = ref(``)
 
 const disabledBtn = computed(() => {
   const content = output.value || ``
@@ -176,42 +175,23 @@ async function publishToWechat() {
       toast.error(`请先提供封面并上传到微信后台`)
       return
     }
-    const accessToken = await getMpAccessToken()
+    console.log(`convertCssVarsToInline before`, output.value)
     const processedContent = convertCssVarsToInline(output.value || ``)
-    const articleTitle = wechatForm.value.title
-    const articleDigest = wechatForm.value.digest
+    console.log(`convertCssVarsToInline after`, processedContent)
 
-    const apiUrl = import.meta.env.DEV
-      ? `/cgi-bin/draft/add?access_token=${accessToken}`
-      : `https://api.weixin.qq.com/cgi-bin/draft/add?access_token=${accessToken}`
+    const draftContent = {
+      title: wechatForm.value.title,
+      author: wechatForm.value.author,
+      digest: wechatForm.value.digest,
+      content_source_url: wechatForm.value.contentSourceUrl || ``,
+      thumb_media_id: wechatForm.value.thumbMediaId || ``,
+      need_open_comment: wechatForm.value.needOpenComment,
+      only_fans_can_comment: wechatForm.value.onlyFansCanComment,
+      content: processedContent,
+    }
 
-    const response = await fetch(apiUrl, {
-      method: `POST`,
-      headers: { 'Content-Type': `application/json` },
-      body: JSON.stringify({
-        articles: [
-          {
-            article_type: `news`,
-            title: articleTitle,
-            author: wechatForm.value.author || `作者名称`,
-            digest: articleDigest,
-            content_source_url: wechatForm.value.contentSourceUrl || ``,
-            thumb_media_id: wechatForm.value.thumbMediaId || ``,
-            need_open_comment: wechatForm.value.needOpenComment,
-            only_fans_can_comment: wechatForm.value.onlyFansCanComment,
-            content: processedContent,
-          },
-        ],
-      }),
-    })
-
-    const result = await response.json()
+    const result = await addMpArticleDraft(draftContent)
     if (result.media_id) {
-      const mpConfig = JSON.parse(localStorage.getItem(`mpConfig`) || `{}`)
-      const appID = mpConfig.appID
-      if (appID)
-        draftUrl.value = `https://mp.weixin.qq.com/cgi-bin/home`
-
       toast.success(`发布成功！`)
       wechatConfigDialogVisible.value = false
       wechatSuccessDialogVisible.value = true
