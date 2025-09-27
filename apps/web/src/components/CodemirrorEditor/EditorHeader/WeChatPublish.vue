@@ -8,6 +8,7 @@ const { output } = storeToRefs(store)
 const displayStore = useDisplayStore()
 
 const wechatForm = ref({
+  title: ``,
   author: ``,
   digest: ``,
   contentSourceUrl: ``,
@@ -24,10 +25,6 @@ const wechatConfigDialogVisible = ref(false)
 const wechatSuccessDialogVisible = ref(false)
 const draftUrl = ref(``)
 
-// 从页面内容提取的标题与摘要（当未通过 props 传入时使用）
-const autoTitle = ref(``)
-const autoDesc = ref(``)
-
 const disabledBtn = computed(() => {
   const content = output.value || ``
   return wechatPublishing.value || content.trim() === ``
@@ -39,20 +36,27 @@ let coverUrlDebounceTimer: number | undefined
 
 function extractTitleAndDesc() {
   try {
-    const headingLevels = [1, 2, 3, 4, 5, 6]
-    const headingElements = headingLevels.map((level) => {
-      return document.querySelector(`#output h${level}`) as HTMLElement | null
-    })
-    const firstHeading = headingElements.find(el => el)
-    const derivedTitle = (firstHeading?.textContent || ``).trim()
+    // 优先从当前选中文章的标题中提取
+    const currentPostTitleEl = document.querySelector(`a.bg-primary.text-primary-foreground.shadow span.line-clamp-1`) as HTMLElement | null
+    let derivedTitle = currentPostTitleEl?.textContent?.trim() || ``
+
+    // 如果没找到当前文章标题，再从 #output 的 h1-h6 中提取
+    if (!derivedTitle) {
+      const headingLevels = [1, 2, 3, 4, 5, 6]
+      const headingElements = headingLevels.map((level) => {
+        return document.querySelector(`#output h${level}`) as HTMLElement | null
+      })
+      const firstHeading = headingElements.find(el => el)
+      derivedTitle = (firstHeading?.textContent || ``).trim()
+    }
 
     const firstParagraph = document.querySelector(`#output p`) as HTMLElement | null
     const derivedDesc = (firstParagraph?.textContent || ``).trim()
     const firstImg = document.querySelector(`#output img`) as HTMLImageElement | null
     const derivedCover = firstImg?.src || ``
 
-    autoTitle.value = derivedTitle
-    autoDesc.value = derivedDesc
+    if (!wechatForm.value.title)
+      wechatForm.value.title = derivedTitle
     if (!wechatForm.value.digest)
       wechatForm.value.digest = derivedDesc
     if (!wechatForm.value.coverUrl && derivedCover)
@@ -122,8 +126,6 @@ function openWechatConfig() {
   }
   // 打开弹窗后提示是否缺少配置
   extractTitleAndDesc()
-  if (!wechatForm.value.digest)
-    wechatForm.value.digest = autoDesc.value || ``
   // 预取并上传封面图，获取 thumb_media_id
   uploadThumbIfNeeded().catch((err) => {
     console.warn(`uploadThumbIfNeeded error`, err)
@@ -219,8 +221,8 @@ async function publishToWechat() {
     }
     const accessToken = await getWechatAccessToken()
     const processedContent = convertCssVarsToInline(output.value || ``)
-    const articleTitle = autoTitle.value
-    const articleDigest = wechatForm.value.digest || autoDesc.value
+    const articleTitle = wechatForm.value.title
+    const articleDigest = wechatForm.value.digest
 
     const apiUrl = import.meta.env.DEV
       ? `/cgi-bin/draft/add?access_token=${accessToken}`
@@ -398,6 +400,13 @@ async function onLocalCoverFileChange(event: Event) {
             </div>
           </AlertDescription>
         </Alert>
+
+        <div class="w-full flex items-center gap-4">
+          <Label for="wechat-title" class="w-16 text-end">
+            标题
+          </Label>
+          <Input id="wechat-title" v-model="wechatForm.title" placeholder="文章标题" />
+        </div>
 
         <div class="w-full flex items-center gap-4">
           <Label for="wechat-author" class="w-16 text-end">
